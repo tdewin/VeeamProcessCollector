@@ -1,0 +1,21 @@
+<!DOCTYPE HTML>
+<html lang="en-US">
+<head>
+	<meta charset="UTF-8">
+	<title>Proc Mon</title>
+	<script src="https://ajax.googleapis.com/ajax/libs/jquery/2.2.2/jquery.min.js"></script>
+	
+	<script>
+		$("document").ready(function() {
+			$.get('http://localhost:46101/xml', function( data ) {
+			  $( "#result" ).html( data );
+			  alert( "Load was performed." );
+			});
+		});
+	</script>
+</head>
+<body>
+	<div id="result">
+	</div>
+</body>
+</html>

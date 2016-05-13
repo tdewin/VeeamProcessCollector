@@ -13,8 +13,10 @@ import (
 )
 type UpdatePost struct {
 	Date uint32 `xml:"Date"`
+	Cn uint64 `xml:"Cn"`
 	Server string`xml:"Server"`
 	VeeamProcesses []*VeeamProcess `xml:"VeeamProcesses>VeeamProcess"`
+	VeeamServerStat *VeeamServerStat  `xml:"Stats"`
 }
 type VeeamProcess struct {
 	ProcessName string `xml:"ProcessName"`
@@ -29,6 +31,11 @@ type VeeamProcessStat struct {
 	WorkingSetPrivate uint64 `xml:"WorkingSetPrivate"`
 	CpuPct float32 `xml:"CpuPct"`
 }
+type VeeamServerStat struct {
+	NetBytesPerSec uint64 `xml:"NetBytesPerSec"`
+	DiskBytesPerSec uint64 `xml:"DiskBytesPerSec"`
+	Cores uint `xml:"Cores"`
+}
 type UpdateQueue struct {
 	lock sync.Mutex
 	updates []*UpdatePost
@@ -39,8 +46,10 @@ type InfraView struct {
 }
 type ServerView struct {
 	Date uint32 `xml:"Date"`
+	Cn uint64 `xml:"Cn"`
 	Server string`xml:"ServerName"`
 	VeeamProcesses []*VeeamProcess `xml:"VeeamProcesses>VeeamProcess"`
+	VeeamServerStat  *VeeamServerStat `xml:"Stats"`
 }
 //unmarshaller for maps http://stackoverflow.com/questions/30928770/marshall-map-to-xml-in-go
 type ServerViews map[string]*ServerView
@@ -65,19 +74,26 @@ func (s ServerViews) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
     return nil
 }
 
+type Answer struct {
+	Error string `xml:"Error,omitempty"`
+	Success string `xml:"Success,omitempty"`
+	Cn uint64 `xml:"Cn,omitempty"`
+}
+
 type VeeamProcessCollector struct {
 	key string
 	stop bool
 	rwlock sync.RWMutex
 	uq *UpdateQueue
 	iv *InfraView
+	naptime int
 }
 func (h *VeeamProcessCollector) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(r.URL.Path,"/")
 	action := strings.Split(path,"/")
 	
 	if path == "" {
-		fmt.Fprintf(w,getIndex())
+		fmt.Fprintf(w,getIndex(h.naptime))
 	} else {
 		switch action[0] {
 			case "xml":
@@ -94,6 +110,33 @@ func (h *VeeamProcessCollector) ServeHTTP(w http.ResponseWriter, r *http.Request
 			case "jquery.js":
 				fmt.Fprintf(w,"%s",getJquery());
 			break
+			case "cnquery":
+				r.ParseForm()
+				h.rwlock.RLock()
+				defer h.rwlock.RUnlock()
+				if r.Form.Get("key") == h.key  {
+					varserv := r.Form.Get("server")
+					if varserv != "" {
+						h.iv.lock.RLock()
+						defer h.iv.lock.RUnlock()
+						server := h.iv.serverviews[varserv]
+						if server != nil {
+							answer,_ := xml.Marshal(Answer{Success:"OK",Cn:(server.Cn+50)})
+							fmt.Fprintf(w,"%s\r\n%s",xml.Header,answer)
+						} else {
+							answer,_ := xml.Marshal(Answer{Success:"OK",Cn:(50)})
+							fmt.Fprintf(w,"%s\r\n%s",xml.Header,answer)
+						}
+					} else {
+						answer,_ := xml.Marshal(Answer{Error:"No server given"})
+						fmt.Fprintf(w,"%s\r\n%s",xml.Header,answer)
+					}
+				} else {
+					answer,_ := xml.Marshal(Answer{Error:"Key Invalid"})
+					fmt.Fprintf(w,"%s\r\n%s",xml.Header,answer)
+					log.Printf("Rogue agent requesting Cn : %s , key %s",r.RemoteAddr,r.Form.Get("key"))				
+				}
+			break;
 			case "postproc":
 				h.rwlock.RLock()
 				defer h.rwlock.RUnlock()
@@ -101,11 +144,7 @@ func (h *VeeamProcessCollector) ServeHTTP(w http.ResponseWriter, r *http.Request
 				r.ParseForm()
 				if r.Form.Get("key") == h.key  {
 					if r.Form.Get("update") != "" {
-						if h.stop {
-							fmt.Fprintf(w,"Stopnow")
-						} else {
-							fmt.Fprintf(w,"Thanks")
-						}
+
 						
 						update := UpdatePost{}
 						
@@ -114,6 +153,15 @@ func (h *VeeamProcessCollector) ServeHTTP(w http.ResponseWriter, r *http.Request
 						err := decoder.Decode(&update)
 						
 						if err == nil {
+							if h.stop {
+								answer,_ := xml.Marshal(Answer{Success:"STOP"})
+								fmt.Fprintf(w,"%s\r\n%s",xml.Header,answer)
+							} else {
+								answer,_ := xml.Marshal(Answer{Success:"OK"})
+								fmt.Fprintf(w,"%s\r\n%s",xml.Header,answer)
+							}
+
+
 							log.Printf("Update from %s",update.Server)
 							
 							//add to the queue in a separate thread so http request returns
@@ -125,6 +173,8 @@ func (h *VeeamProcessCollector) ServeHTTP(w http.ResponseWriter, r *http.Request
 							} (h,&update)
 							
 						} else {
+							answer,_ := xml.Marshal(Answer{Error:"FORMAT"})
+							fmt.Fprintf(w,"%s\r\n%s",xml.Header,answer)
 							log.Printf("Could not parse incoming %s",r.Form.Get("update"))
 							log.Print(err)
 						}
@@ -146,17 +196,7 @@ func (h *VeeamProcessCollector) ServeHTTP(w http.ResponseWriter, r *http.Request
 	}
 }
 
-/**
-type InfraView struct {
-	lock sync.Mutex
-	serverviews map[string]*ServerView
-}
-type ServerView struct {
-	Date uint32 `xml:"Date"`
-	Server string`xml:"Server"`
-	VeeamProcesses []VeeamProcess `xml:"VeeamProcesses>VeeamProcess"`
-}
-**/
+
 func transform(h* VeeamProcessCollector) {
 	h.uq.lock.Lock()
 	defer h.uq.lock.Unlock()
@@ -170,13 +210,15 @@ func transform(h* VeeamProcessCollector) {
 			upd := h.uq.updates[u]
 			
 			if h.iv.serverviews[upd.Server] == nil {
-				sv := ServerView{upd.Date,upd.Server,upd.VeeamProcesses}
+				sv := ServerView{upd.Date,upd.Cn,upd.Server,upd.VeeamProcesses,upd.VeeamServerStat}
 				h.iv.serverviews[upd.Server] = &sv
-			} else if h.iv.serverviews[upd.Server].Date < upd.Date  {
+			} else if h.iv.serverviews[upd.Server].Cn < upd.Cn  {
 				h.iv.serverviews[upd.Server].Date = upd.Date
+				h.iv.serverviews[upd.Server].Cn = upd.Cn
 				h.iv.serverviews[upd.Server].VeeamProcesses = upd.VeeamProcesses
+				h.iv.serverviews[upd.Server].VeeamServerStat  = upd.VeeamServerStat 
 			} else {
-				log.Printf("Old update, ignoring");
+				log.Printf("Old update, ignoring, collector might not be able to hand load");
 			}
 		}
 		h.uq.updates = []*UpdatePost{}
@@ -187,13 +229,15 @@ func transform(h* VeeamProcessCollector) {
 func transformLoop(h* VeeamProcessCollector) {
 	for {
 		transform(h)
-		time.Sleep(10 * time.Second)
+		time.Sleep(time.Duration(h.naptime) * time.Second)
 	}
 }
 
 func main() {
     fport := flag.Int("port", 46101, "Specify port listening")
     fkey := flag.String("key", "", "key for posting")
+    fnaptime := flag.Int("naptime", 3, "Nap time")
+	
     flag.Parse()
 	
 	key := *fkey
@@ -211,7 +255,7 @@ func main() {
 	uq := UpdateQueue{}
 	iv := InfraView{}
 	iv.serverviews = make(map[string]*ServerView)
-    collector := VeeamProcessCollector{key:key,stop:false,uq:&uq,iv:&iv}
+    collector := VeeamProcessCollector{key:key,stop:false,uq:&uq,iv:&iv,naptime:*fnaptime}
     go transformLoop(&collector)
 	http.Handle("/", &collector)
 	
