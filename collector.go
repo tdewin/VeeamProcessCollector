@@ -34,6 +34,7 @@ type VeeamProcessStat struct {
 type VeeamServerStat struct {
 	NetBytesPerSec uint64 `xml:"NetBytesPerSec"`
 	DiskBytesPerSec uint64 `xml:"DiskBytesPerSec"`
+	DiskTransfersPerSec uint64 `xml:"DiskTransfersPerSec"`
 	Cores uint `xml:"Cores"`
 }
 type UpdateQueue struct {

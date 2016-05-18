@@ -36,6 +36,13 @@ func getIndex(naptime int) string {
 			height:10px;
 			width:10px;
 		}
+		.countname {
+			font-weight: bold;
+			width:150px;
+		}
+		.countercr {
+			width:100px;
+		}
 	</style>
 	<script>
 		function mbcalc(strp) {
@@ -72,8 +79,12 @@ func getIndex(naptime int) string {
 				serverhtml = "<h1>"+$(this).find("ServerName").text()+"</h1>"
 				var d = new Date(0); // The 0 there is the key, which sets the date to the epoch
 				d.setUTCSeconds(parseInt($(this).find("Date").text()));
-				serverhtml += d
-				serverhtml += "<br><table><tr><td>NET MByte/s</td><td>"+(mbcalc($(this).find("NetBytesPerSec").text()))+"</td><td>DISK MByte/s</td><td>"+(mbcalc($(this).find("DiskBytesPerSec").text()))+"</td><td>CORES</td><td>"+$(this).find("Cores").text()+"</td></tr></table>"
+				serverhtml += d+"<br><table><tr>"
+				serverhtml += "<td class='countname'>NET MByte/s</td><td class='countercr'>"+(mbcalc($(this).find("NetBytesPerSec").text()))+"</td>"
+				serverhtml += "<td class='countname'>DISK MByte/s</td><td class='countercr'>"+(mbcalc($(this).find("DiskBytesPerSec").text()))+"</td>"
+				serverhtml += "<td class='countname'>DISK IO/s</td><td class='countercr'>"+($(this).find("DiskTransfersPerSec").text())+"</td>"
+				serverhtml += "<td class='countname'>CORES</td><td class='countercr'>"+$(this).find("Cores").text()+"</td>"
+				serverhtml += "</tr></table><br>"
 				
 				prochtml = "<table><tr class='toprow'><td>PID</td><td>PPID</td><td>Proc</td><td>CPU&#37</td><td>MEM MB</td><td>IO MBs</td><td>CMD</td></tr>"
 				$(this).find("VeeamProcess").each(function() {
